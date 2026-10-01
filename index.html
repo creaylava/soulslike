@@ -19,12 +19,17 @@
   #stamina-bar{background:linear-gradient(to bottom, #6b6, #363);height:8px;width:180px;}
   #flasks-display{color:#d4af37;font-size:16px;font-weight:bold;letter-spacing:1px;text-shadow:0 0 8px #d4af37;display:flex;align-items:center;gap:5px;}
   #souls-display{color:#d4af37;font-size:16px;font-weight:bold;letter-spacing:1px;text-shadow:0 0 8px #d4af37;margin-top:5px;}
+  #floor-display{color:#fff;font-size:20px;font-weight:bold;letter-spacing:2px;text-shadow:0 0 10px rgba(255,255,255,0.5);margin-bottom:5px;}
   
   #death-screen{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;z-index:100;display:none;flex-direction:column;align-items:center;justify-content:center;opacity:0;transition:opacity 1s;}
   #death-screen.show{display:flex;opacity:1;}
   #death-text{color:#8b0000;font-size:48px;font-weight:bold;letter-spacing:8px;font-family:'Cinzel', serif;text-shadow:0 0 20px rgba(139,0,0,0.8);}
-  
-  /* 控制区 */
+
+  #clear-screen{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:90;display:none;flex-direction:column;align-items:center;justify-content:center;opacity:0;transition:opacity 1s;}
+  #clear-screen.show{display:flex;opacity:1;}
+  #clear-text{color:#d4af37;font-size:32px;font-weight:bold;letter-spacing:4px;font-family:'Cinzel', serif;text-shadow:0 0 15px #d4af37;}
+  #clear-sub{color:#aaa;font-size:14px;margin-top:10px;font-family:'EB Garamond', serif;}
+
   #controls{position:absolute;bottom:0;left:0;right:0;height:40%;z-index:15;pointer-events:none;}
   .touch-btn{position:absolute;bottom:30px;width:70px;height:70px;border-radius:50%;background:rgba(20,20,20,0.7);border:2px solid #444;color:#888;font-size:12px;display:flex;align-items:center;justify-content:center;font-family:'Cinzel', serif;pointer-events:auto;box-shadow:0 4px 10px rgba(0,0,0,0.8);text-shadow:0 1px 2px #000;}
   .touch-btn:active{background:rgba(80,80,80,0.9);color:#fff;border-color:#d4af37;}
@@ -42,12 +47,18 @@
 <canvas id="gameCanvas"></canvas>
 
 <div id="ui-layer">
+  <div id="floor-display">第 1 层</div>
   <div class="bar-group">
     <div class="bar-bg"><div id="hp-bar" class="bar-fill" style="width:100%"></div></div>
     <div class="bar-bg"><div id="stamina-bar" class="bar-fill" style="width:100%"></div></div>
   </div>
   <div id="flasks-display">🍶 <span id="flask-count">3</span></div>
   <div id="souls-display">魂: <span id="souls-count">0</span></div>
+</div>
+
+<div id="clear-screen">
+  <div id="clear-text">区域已净化</div>
+  <div id="clear-sub">正在前往下一层...</div>
 </div>
 
 <div id="death-screen">
@@ -63,11 +74,10 @@
 </div>
 
 <script>
-/* ================= 声音引擎 (Web Audio API) ================= */
+/* ================= 声音引擎 ================= */
 let audioCtx = null;
 let isAudioInitialized = false;
 let ambientOsc = null;
-let ambientGain = null;
 
 function initAudio() {
   if (isAudioInitialized) return;
@@ -75,24 +85,20 @@ function initAudio() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     isAudioInitialized = true;
     
-    // 环境底噪
     ambientOsc = audioCtx.createOscillator();
-    ambientGain = audioCtx.createGain();
+    const ambientGain = audioCtx.createGain();
     ambientOsc.type = 'sawtooth';
     ambientOsc.frequency.setValueAtTime(45, audioCtx.currentTime);
     ambientOsc.frequency.linearRampToValueAtTime(50, audioCtx.currentTime + 2);
     ambientOsc.connect(ambientGain);
     ambientGain.connect(audioCtx.destination);
-    ambientGain.gain.setValueAtTime(0.1, audioCtx.currentTime); // 稍微调大音量
+    ambientGain.gain.setValueAtTime(0.1, audioCtx.currentTime);
     ambientOsc.start();
   } catch(e) { console.log('Web Audio not supported', e); }
 }
 
-// 解锁音频
 function unlockAudio() {
-  if (!audioCtx) {
-    initAudio();
-  }
+  if (!audioCtx) initAudio();
   if (audioCtx && audioCtx.state === 'suspended') {
     audioCtx.resume().then(() => { console.log("Audio Context Resumed"); });
   }
@@ -129,6 +135,11 @@ function playSound(type) {
     osc.type = 'square'; osc.frequency.setValueAtTime(80, t);
     gain.gain.setValueAtTime(0.3, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.1);
     osc.connect(gain); gain.connect(audioCtx.destination); osc.start(t); osc.stop(t + 0.1);
+  } else if (type === 'clear') {
+    const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+    osc.type = 'sine'; osc.frequency.setValueAtTime(600, t); osc.frequency.linearRampToValueAtTime(800, t + 0.3);
+    gain.gain.setValueAtTime(0.2, t); gain.gain.exponentialRampToValueAtTime(0.01, t + 0.5);
+    osc.connect(gain); gain.connect(audioCtx.destination); osc.start(t); osc.stop(t + 0.5);
   }
 }
 
@@ -151,13 +162,43 @@ const state = {
     attackBox: null, dx: 1, dy: 0,
     parryTimer: 0, blockTimer: 0
   },
-  enemies: [
-    { x: W/2 + 180, y: H/2 - 150, radius: 15, hp: 60, maxHp: 60, speed: 1.0, state:'idle', timer:0, color:'#4a3a2a', attackRange: 50, dx: 1, dy: 0, staggerTimer: 0 }
-  ],
+  enemies: [], // 初始为空，由 spawnEnemies 生成
   bloodstain: null,
   bonfire: { x: W/2, y: H/2, radius: 20 },
-  time: 0
+  currentFloor: 1,
+  time: 0,
+  isTransitioning: false
 };
+
+/* ================= 刷怪逻辑（核心新增） ================= */
+function spawnEnemies(floor) {
+  state.enemies = [];
+  // 第1层2只，第2层3只，以此类推，上限8只防止卡顿
+  const count = Math.min(2 + floor - 1, 8); 
+  for (let i = 0; i < count; i++) {
+    let ex, ey, tooClose;
+    // 防止怪物刷在玩家脸上或篝火里
+    do {
+      ex = Math.random() * (W - 200) + 100;
+      ey = Math.random() * (H - 200) + 100;
+      tooClose = Math.hypot(ex - state.player.x, ey - state.player.y) < 200;
+    } while (tooClose || Math.hypot(ex - state.bonfire.x, ey - state.bonfire.y) < 100);
+
+    const hpScale = 50 + floor * 20;
+    const speedScale = 0.8 + floor * 0.15;
+
+    state.enemies.push({
+      x: ex, y: ey, radius: 15,
+      hp: hpScale, maxHp: hpScale,
+      speed: speedScale,
+      state: 'idle', timer: 0, color: '#4a3a2a',
+      attackRange: 50, dx: 1, dy: 0, staggerTimer: 0
+    });
+  }
+}
+
+// 初始生成第一层
+spawnEnemies(1);
 
 /* ================= 输入处理 ================= */
 const joystickBase = document.getElementById('joystick-base');
@@ -205,13 +246,11 @@ function performAttack() {
   const angle = Math.atan2(p.dy, p.dx);
   p.attackBox = { x: p.x + Math.cos(angle) * 25, y: p.y + Math.sin(angle) * 25, r: 35, damage: 25 };
 }
-
 function performShield() {
   const p = state.player;
   if (p.state !== 'idle' || p.stamina < 15) return;
-  p.state = 'block'; p.blockTimer = 0.8; p.parryTimer = 0.2; p.stamina -= 15; // 0.2秒弹反窗口
+  p.state = 'block'; p.blockTimer = 0.8; p.parryTimer = 0.2; p.stamina -= 15;
 }
-
 function performRoll() {
   const p = state.player;
   if (p.state !== 'idle' || p.stamina < 25) return;
@@ -221,7 +260,6 @@ function performRoll() {
   const len = Math.sqrt(dx*dx + dy*dy) || 1;
   p.rollDx = dx/len; p.rollDy = dy/len;
 }
-
 function performHeal() {
   const p = state.player;
   if (p.state !== 'idle' || p.flasks <= 0 || p.hp >= p.maxHp) return;
@@ -233,7 +271,30 @@ function performHeal() {
 function update(dt) {
   state.time += dt;
   const p = state.player;
-  
+
+  // 清层逻辑
+  if (!state.isTransitioning && state.enemies.length > 0 && state.enemies.every(e => e.hp <= 0)) {
+    state.isTransitioning = true;
+    playSound('clear');
+    const clearScreen = document.getElementById('clear-screen');
+    clearScreen.classList.add('show');
+    
+    setTimeout(() => {
+      clearScreen.classList.remove('show');
+      state.currentFloor++;
+      document.getElementById('floor-display').textContent = `第 ${state.currentFloor} 层`;
+      // 回满状态
+      p.hp = p.maxHp; p.stamina = p.maxStamina; p.flasks = 3;
+      document.getElementById('flask-count').textContent = p.flasks;
+      // 重置玩家位置
+      p.x = state.bonfire.x; p.y = state.bonfire.y - 30;
+      // 刷新怪
+      spawnEnemies(state.currentFloor);
+      state.isTransitioning = false;
+    }, 2500);
+    return;
+  }
+
   if (p.timer > 0) { p.timer -= dt; } 
   else {
     if (p.state === 'attack') { p.state = 'idle'; p.attackBox = null; }
@@ -259,7 +320,7 @@ function update(dt) {
   // 敌人 AI
   state.enemies.forEach(enemy => {
     if (enemy.hp <= 0) return;
-    if (enemy.staggerTimer > 0) { enemy.staggerTimer -= dt; enemy.state = 'staggered'; return; } // 弹反硬直
+    if (enemy.staggerTimer > 0) { enemy.staggerTimer -= dt; enemy.state = 'staggered'; return; }
 
     const dx = p.x - enemy.x, dy = p.y - enemy.y;
     const dist = Math.sqrt(dx*dx + dy*dy);
@@ -273,20 +334,13 @@ function update(dt) {
       enemy.timer -= dt;
       if (enemy.timer <= 0) {
         if (dist < enemy.attackRange + 15) {
-          // 核心：玩家状态判定
           if (p.state === 'block' && p.parryTimer > 0) {
-            // 完美弹反！
             enemy.state = 'staggered'; enemy.staggerTimer = 2.0;
-            p.stamina += 15; // 弹反奖励体力
-            playSound('parry');
+            p.stamina += 15; playSound('parry');
           } else if (p.state === 'block') {
-            // 普通格挡
-            p.hp -= 5; p.stamina -= 20;
-            playSound('block');
-            // 击退
+            p.hp -= 5; p.stamina -= 20; playSound('block');
             enemy.x -= (dx/dist) * 30; enemy.y -= (dy/dist) * 30;
           } else if (!p.invuln && p.state !== 'roll') {
-            // 受击
             p.hp -= 35; playSound('hit');
             if (p.hp <= 0) handleDeath();
           }
@@ -304,7 +358,7 @@ function update(dt) {
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist < p.attackBox.r + enemy.radius) {
         let damage = p.attackBox.damage;
-        if (enemy.state === 'staggered') damage *= 2; // 弹反后处决伤害加倍
+        if (enemy.state === 'staggered') damage *= 2;
         enemy.hp -= damage;
         enemy.x += (dx/dist) * 25; enemy.y += (dy/dist) * 25;
         p.attackBox = null;
@@ -343,27 +397,24 @@ function handleDeath() {
     p.x = state.bonfire.x; p.y = state.bonfire.y - 30;
     p.hp = p.maxHp; p.stamina = p.maxStamina; p.flasks = 3; p.state = 'idle';
     document.getElementById('flask-count').textContent = p.flasks;
-    state.enemies.forEach(e => { e.x = W/2 + 180; e.y = H/2 - 150; e.hp = e.maxHp; e.timer = 0; e.state = 'idle'; e.staggerTimer = 0; });
+    // 死亡后重置当前楼层的怪
+    spawnEnemies(state.currentFloor);
   }, 2500);
 }
 
-/* ================= 渲染（死亡细胞风格） ================= */
+/* ================= 渲染 ================= */
 function render() {
   const p = state.player;
   ctx.clearRect(0, 0, W, H);
   
-  // 1. 死亡细胞风格的地面（深蓝灰色，有地砖纹理）
-  ctx.fillStyle = '#1e222a'; // 深蓝灰底色
+  ctx.fillStyle = '#1e222a';
   ctx.fillRect(0, 0, W, H);
   
-  // 绘制地砖
-  ctx.strokeStyle = '#2c3038'; // 地砖线条
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#2c3038'; ctx.lineWidth = 2;
   const tileSize = 60;
   for (let x = 0; x < W; x += tileSize) {
     for (let y = 0; y < H; y += tileSize) {
       ctx.strokeRect(x, y, tileSize, tileSize);
-      // 地砖高光
       ctx.fillStyle = 'rgba(255,255,255,0.02)';
       ctx.fillRect(x + 2, y + 2, tileSize - 4, tileSize - 4);
     }
@@ -371,74 +422,51 @@ function render() {
   
   const time = state.time;
 
-  // 2. 篝火
+  // 篝火
   ctx.beginPath(); ctx.arc(state.bonfire.x, state.bonfire.y, 25, 0, Math.PI*2); ctx.fillStyle = '#111'; ctx.fill();
   const fireScale = 1 + Math.sin(time * 10) * 0.15;
   ctx.beginPath(); ctx.arc(state.bonfire.x, state.bonfire.y, 12 * fireScale, 0, Math.PI*2); ctx.fillStyle = `rgba(255, 100, 0, ${0.6 + Math.sin(time*15)*0.2})`; ctx.fill();
   ctx.beginPath(); ctx.arc(state.bonfire.x, state.bonfire.y, 6 * fireScale, 0, Math.PI*2); ctx.fillStyle = `rgba(255, 200, 50, ${0.8 + Math.sin(time*20)*0.2})`; ctx.fill();
   ctx.beginPath(); ctx.moveTo(state.bonfire.x - 10, state.bonfire.y + 10); ctx.lineTo(state.bonfire.x - 5, state.bonfire.y - 15); ctx.strokeStyle = '#555'; ctx.lineWidth = 3; ctx.stroke();
 
-  // 3. 血迹/掉落的魂
   if (state.bloodstain) {
     ctx.beginPath(); ctx.arc(state.bloodstain.x, state.bloodstain.y, 12, 0, Math.PI*2); ctx.fillStyle = 'rgba(139, 0, 0, 0.4)'; ctx.fill();
     ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 2; ctx.stroke();
   }
 
-  // 4. 敌人（活尸）
+  // 画敌人
   state.enemies.forEach(enemy => {
     if (enemy.hp <= 0) return;
     const ex = enemy.x, ey = enemy.y;
-    
     ctx.save(); ctx.translate(ex, ey);
-    
-    if (enemy.state === 'staggered') {
-      // 弹反硬直：视觉闪烁
-      if (Math.floor(time * 15) % 2 === 0) ctx.globalAlpha = 0.5;
-    }
-
-    // 身体
+    if (enemy.state === 'staggered') { if (Math.floor(time * 15) % 2 === 0) ctx.globalAlpha = 0.5; }
     ctx.beginPath(); ctx.ellipse(0, 0, 14, 18, Math.sin(time*5 + ex)*0.1, 0, Math.PI*2);
     ctx.fillStyle = enemy.state === 'windup' ? '#8a2a2a' : (enemy.state === 'staggered' ? '#aaaaaa' : enemy.color); ctx.fill();
-    
-    // 眼睛（弹反硬直时眼睛变灰）
     ctx.beginPath(); ctx.arc(-5, -5, 2, 0, Math.PI*2); ctx.arc(5, -5, 2, 0, Math.PI*2);
     ctx.fillStyle = enemy.state === 'staggered' ? '#666' : '#e74c3c'; ctx.fill();
-    
-    // 木棒
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(20, 15); ctx.strokeStyle = '#5c4033'; ctx.lineWidth = 4; ctx.stroke();
-    
     ctx.restore();
     
-    // 敌人血条
     ctx.fillStyle = '#111'; ctx.fillRect(ex - 20, ey - 30, 40, 4);
     ctx.fillStyle = '#8b0000'; ctx.fillRect(ex - 20, ey - 30, 40 * (enemy.hp/enemy.maxHp), 4);
   });
 
-  // 5. 玩家（游魂骑士）
+  // 画玩家
   const px = p.x, py = p.y;
   ctx.save(); ctx.translate(px, py); const angle = Math.atan2(p.dy, p.dx); ctx.rotate(angle);
-  
-  // 盾牌（格挡时举在身前）
   const shieldX = p.state === 'block' ? 12 : -8;
   const shieldY = p.state === 'block' ? 0 : -8;
   ctx.beginPath(); ctx.arc(shieldX, shieldY, 10, 0, Math.PI*2); ctx.fillStyle = p.state === 'block' ? '#4a6b8a' : '#2a2a2a'; ctx.fill(); ctx.strokeStyle = '#555'; ctx.lineWidth = 2; ctx.stroke();
-  
-  // 身体
   ctx.beginPath(); ctx.ellipse(0, 0, 14, 12, 0, 0, Math.PI*2); ctx.fillStyle = p.invuln ? '#ccc' : '#1a1a1a'; ctx.fill(); ctx.strokeStyle = '#444'; ctx.lineWidth = 2; ctx.stroke();
-  
-  // 头盔
   ctx.beginPath(); ctx.moveTo(4, -8); ctx.lineTo(12, 0); ctx.lineTo(4, 8); ctx.fillStyle = '#333'; ctx.fill();
-  
-  // 剑
   ctx.beginPath(); ctx.moveTo(5, 8); ctx.lineTo(30, 15); ctx.strokeStyle = '#888'; ctx.lineWidth = 4; ctx.stroke();
-  
   ctx.restore();
 
   if (p.state === 'attack' && p.attackBox) {
     ctx.beginPath(); ctx.arc(p.attackBox.x, p.attackBox.y, p.attackBox.r, 0, Math.PI*2); ctx.fillStyle = 'rgba(200, 50, 50, 0.2)'; ctx.fill();
   }
 
-  // 6. 视野迷雾（死亡细胞风格的蓝紫色迷雾）
+  // 视野迷雾
   const visionRadius = 280;
   const gradient = ctx.createRadialGradient(px, py, 60, px, py, visionRadius);
   gradient.addColorStop(0, 'rgba(10, 15, 30, 0)');
@@ -457,7 +485,7 @@ let lastTime = 0;
 function loop(time) {
   const dt = Math.min((time - lastTime) / 1000, 0.1) || 0;
   lastTime = time;
-  if (state.player.state !== 'dead') update(dt);
+  if (state.player.state !== 'dead' && !state.isTransitioning) update(dt);
   render();
   requestAnimationFrame(loop);
 }
