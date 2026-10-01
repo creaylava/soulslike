@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>🌑 极简魂类 · Ashen</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=EB+Garamond:wght@700&display=swap');
+  
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0c;font-family:'EB Garamond', serif;touch-action:none;user-select:none;}
+  canvas{display:block;position:absolute;top:0;left:0;z-index:1;}
+  
+  /* 顶部UI - 黑魂风格状态条 */
+  #ui-layer{position:absolute;top:15px;left:20px;right:20px;z-index:10;pointer-events:none;display:flex;flex-direction:column;gap:8px;font-family:'Cinzel', serif;}
+  .bar-group{display:flex;flex-direction:column;gap:2px;}
+  .bar-bg{width:240px;height:14px;background:#111;border:2px solid #333;border-radius:2px;overflow:hidden;box-shadow:0 2px 4px rgba(0,0,0,0.8);position:relative;}
+  .bar-fill{height:100%;width:0%;transition:width 0.15s;box-shadow: inset 0 0 10px rgba(0,0,0,0.5);}
+  #hp-bar{background:linear-gradient(to bottom, #a00, #600);}
+  #stamina-bar{background:linear-gradient(to bottom, #6b6, #363);height:8px;width:180px;}
+  #flasks-display{color:#d4af37;font-size:16px;font-weight:bold;letter-spacing:1px;text-shadow:0 0 8px #d4af37;display:flex;align-items:center;gap:5px;}
+  #souls-display{color:#d4af37;font-size:16px;font-weight:bold;letter-spacing:1px;text-shadow:0 0 8px #d4af37;margin-top:5px;}
+  
+  /* 死亡画面 - 魂味核心 */
+  #death-screen{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;z-index:100;display:none;flex-direction:column;align-items:center;justify-content:center;opacity:0;transition:opacity 1s;}
+  #death-screen.show{display:flex;opacity:1;}
+  #death-text{color:#8b0000;font-size:48px;font-weight:bold;letter-spacing:8px;font-family:'Cinzel', serif;text-shadow:0 0 20px rgba(139,0,0,0.8);}
+  
+  /* 触摸控制 - 黑魂风格按钮 */
+  #controls{position:absolute;bottom:0;left:0;right:0;height:40%;z-index:15;pointer-events:none;}
+  .touch-btn{position:absolute;bottom:30px;width:70px;height:70px;border-radius:50%;background:rgba(20,20,20,0.7);border:2px solid #444;color:#888;font-size:12px;display:flex;align-items:center;justify-content:center;font-family:'Cinzel', serif;pointer-events:auto;box-shadow:0 4px 10px rgba(0,0,0,0.8);text-shadow:0 1px 2px #000;}
+  .touch-btn:active{background:rgba(80,80,80,0.9);color:#fff;border-color:#d4af37;}
+  
+  #btn-attack{right:90px;bottom:50px;width:80px;height:80px;font-size:14px;border-color:#8b0000;color:#c00;}
+  #btn-roll{right:190px;bottom:30px;width:60px;height:60px;}
+  #btn-heal{right:30px;bottom:140px;width:55px;height:55px;border-color:#d4af37;color:#d4af37;}
+  
+  #joystick-base{position:absolute;bottom:40px;left:40px;width:100px;height:100px;border-radius:50%;background:rgba(20,20,20,0.5);border:2px solid #444;pointer-events:auto;}
+  #joystick-knob{position:absolute;top:25px;left:25px;width:50px;height:50px;border-radius:50%;background:rgba(100,100,100,0.5);box-shadow:0 2px 5px rgba(0,0,0,0.5);}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+  <div class="bar-group">
+    <div class="bar-bg"><div id="hp-bar" class="bar-fill" style="width:100%"></div></div>
+    <div class="bar-bg"><div id="stamina-bar" class="bar-fill" style="width:100%"></div></div>
+  </div>
+  <div id="flasks-display">🍶 <span id="flask-count">3</span></div>
+  <div id="souls-display">魂: <span id="souls-count">0</span></div>
+</div>
+
+<div id="death-screen">
+  <div id="death-text">YOU DIED</div>
+</div>
+
+<div id="controls">
+  <div id="joystick-base"><div id="joystick-knob"></div></div>
+  <button class="touch-btn" id="btn-attack">攻击</button>
+  <button class="touch-btn" id="btn-roll">翻滚</button>
+  <button class="touch-btn" id="btn-heal">喝药</button>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W; canvas.height = H;
+}
+window.addEventListener('resize', resize); resize();
+
+/* ================= 游戏状态 ================= */
+const state = {
+  keys: { w:false, a:false, s:false, d:false },
+  joystick: { dx:0, dy:0, active:false },
+  player: {
+    x: W/2, y: H/2, radius: 12, speed: 3.0,
+    hp: 100, maxHp: 100, stamina: 100, maxStamina: 100,
+    souls: 0, flasks: 3,
+    state: 'idle', // idle, roll, attack, dead
+    timer: 0, invuln: false, color: '#aaa',
+    attackBox: null, dx: 1, dy: 0
+  },
+  enemies: [
+    { x: W/2 + 180, y: H/2 - 150, radius: 15, hp: 60, maxHp: 60, speed: 1.0, state:'idle', timer:0, color:'#4a3a2a', attackRange: 50, dx: 1, dy: 0 }
+  ],
+  bloodstain: null, // 掉落魂
+  bonfire: { x: W/2, y: H/2, radius: 20 },
+  camera: { x: 0, y: 0 },
+  time: 0
+};
+
+/* ================= 输入处理 ================= */
+const joystickBase = document.getElementById('joystick-base');
+const joystickKnob = document.getElementById('joystick-knob');
+let joyTouchId = null;
+
+joystickBase.addEventListener('touchstart', (e) => { e.preventDefault(); const touch = e.changedTouches[0]; joyTouchId = touch.identifier; state.joystick.active = true; }, {passive: false});
+document.addEventListener('touchmove', (e) => {
+  if (!state.joystick.active) return; e.preventDefault();
+  for (let i=0; i<e.changedTouches.length; i++) {
+    const touch = e.changedTouches[i];
+    if (touch.identifier === joyTouchId) {
+      const rect = joystickBase.getBoundingClientRect();
+      const centerX = rect.left + rect.width/2, centerY = rect.top + rect.height/2;
+      let dx = touch.clientX - centerX, dy = touch.clientY - centerY;
+      const dist = Math.sqrt(dx*dx + dy*dy), maxDist = rect.width/2 - 10;
+      if (dist > maxDist) { dx = (dx/dist)*maxDist; dy = (dy/dist)*maxDist; }
+      state.joystick.dx = dx / maxDist; state.joystick.dy = dy / maxDist;
+      joystickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+    }
+  }
+}, {passive: false});
+document.addEventListener('touchend', (e) => {
+  for (let i=0; i<e.changedTouches.length; i++) {
+    if (e.changedTouches[i].identifier === joyTouchId) {
+      state.joystick.active = false; state.joystick.dx = 0; state.joystick.dy = 0;
+      joystickKnob.style.transform = `translate(0px, 0px)`; joyTouchId = null;
+    }
+  }
+});
+window.addEventListener('keydown', e => { if(e.key==='w')state.keys.w=true; if(e.key==='a')state.keys.a=true; if(e.key==='s')state.keys.s=true; if(e.key==='d')state.keys.d=true; });
+window.addEventListener('keyup', e => { if(e.key==='w')state.keys.w=false; if(e.key==='a')state.keys.a=false; if(e.key==='s')state.keys.s=false; if(e.key==='d')state.keys.d=false; });
+
+document.getElementById('btn-attack').addEventListener('touchstart', (e)=>{ e.preventDefault(); performAttack(); });
+document.getElementById('btn-roll').addEventListener('touchstart', (e)=>{ e.preventDefault(); performRoll(); });
+document.getElementById('btn-heal').addEventListener('touchstart', (e)=>{ e.preventDefault(); performHeal(); });
+
+/* ================= 玩家动作逻辑 ================= */
+function performAttack() {
+  const p = state.player;
+  if (p.state !== 'idle' || p.stamina < 15) return;
+  p.state = 'attack'; p.timer = 0.25; p.stamina -= 15;
+  const angle = Math.atan2(p.dy, p.dx);
+  p.attackBox = { x: p.x + Math.cos(angle) * 25, y: p.y + Math.sin(angle) * 25, r: 35, damage: 25 };
+}
+function performRoll() {
+  const p = state.player;
+  if (p.state !== 'idle' || p.stamina < 25) return;
+  p.state = 'roll'; p.timer = 0.4; p.invuln = true; p.stamina -= 25;
+  let dx = state.joystick.dx || (state.keys.d?1:0) - (state.keys.a?1:0);
+  let dy = state.joystick.dy || (state.keys.s?1:0) - (state.keys.w?1:0);
+  const len = Math.sqrt(dx*dx + dy*dy) || 1;
+  p.rollDx = dx/len; p.rollDy = dy/len;
+}
+function performHeal() {
+  const p = state.player;
+  if (p.state !== 'idle' || p.flasks <= 0 || p.hp >= p.maxHp) return;
+  p.state = 'heal'; p.timer = 1.0; p.flasks--;
+  document.getElementById('flask-count').textContent = p.flasks;
+}
+
+/* ================= 核心循环 ================= */
+function update(dt) {
+  state.time += dt;
+  const p = state.player;
+  
+  if (p.timer > 0) { p.timer -= dt; } 
+  else {
+    if (p.state === 'attack') { p.state = 'idle'; p.attackBox = null; }
+    if (p.state === 'roll') { p.state = 'idle'; p.invuln = false; }
+    if (p.state === 'heal') { p.hp = Math.min(p.maxHp, p.hp + 50); p.state = 'idle'; }
+  }
+
+  if (p.state !== 'roll' && p.stamina < p.maxStamina) p.stamina = Math.min(p.maxStamina, p.stamina + 18 * dt);
+
+  // 移动
+  if (p.state === 'idle') {
+    let dx = state.joystick.dx, dy = state.joystick.dy;
+    if (dx === 0 && dy === 0) { dx = (state.keys.d?1:0) - (state.keys.a?1:0); dy = (state.keys.s?1:0) - (state.keys.w?1:0); }
+    const len = Math.sqrt(dx*dx + dy*dy);
+    if (len > 0) { p.x += (dx/len) * p.speed * 60 * dt; p.y += (dy/len) * p.speed * 60 * dt; p.dx = dx/len; p.dy = dy/len; }
+  } else if (p.state === 'roll') { p.x += p.rollDx * 9 * 60 * dt; p.y += p.rollDy * 9 * 60 * dt; }
+
+  // 边界限制
+  p.x = Math.max(p.radius + 20, Math.min(W - p.radius - 20, p.x));
+  p.y = Math.max(p.radius + 20, Math.min(H - p.radius - 20, p.y));
+
+  // 敌人 AI
+  state.enemies.forEach(enemy => {
+    if (enemy.hp <= 0) return;
+    const dx = p.x - enemy.x, dy = p.y - enemy.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    
+    if (dist > enemy.attackRange) {
+      enemy.x += (dx/dist) * enemy.speed * 60 * dt; enemy.y += (dy/dist) * enemy.speed * 60 * dt;
+      enemy.state = 'idle';
+    } else { enemy.state = 'windup'; if (!enemy.timer || enemy.timer <= 0) { enemy.timer = 0.8; } }
+    if (enemy.state === 'windup') {
+      enemy.timer -= dt;
+      if (enemy.timer <= 0) {
+        if (dist < enemy.attackRange + 15 && !p.invuln && p.state !== 'roll') {
+          p.hp -= 35; 
+          document.getElementById('flask-count').style.color = '#d4af37';
+          if (p.hp <= 0) handleDeath();
+        }
+        enemy.state = 'idle'; enemy.timer = 1.5; // 后摇
+      }
+    } else { enemy.timer -= dt; }
+  });
+
+  // 玩家攻击命中
+  if (p.state === 'attack' && p.attackBox) {
+    state.enemies.forEach(enemy => {
+      if (enemy.hp <= 0) return;
+      const dx = enemy.x - p.attackBox.x, dy = enemy.y - p.attackBox.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < p.attackBox.r + enemy.radius) {
+        enemy.hp -= p.attackBox.damage;
+        enemy.x += (dx/dist) * 25; enemy.y += (dy/dist) * 25;
+        p.attackBox = null;
+        if (enemy.hp <= 0) { p.souls += 50; document.getElementById('souls-count').textContent = p.souls; }
+      }
+    });
+  }
+  
+  // 拾取魂
+  if (state.bloodstain && p.state === 'idle') {
+    const dx = p.x - state.bloodstain.x, dy = p.y - state.bloodstain.y;
+    if (Math.sqrt(dx*dx + dy*dy) < 30) { p.souls += state.bloodstain.amount; document.getElementById('souls-count').textContent = p.souls; state.bloodstain = null; }
+  }
+  
+  // 篝火交互（回满状态）
+  if (p.state === 'idle') {
+    const dx = p.x - state.bonfire.x, dy = p.y - state.bonfire.y;
+    if (Math.sqrt(dx*dx + dy*dy) < 40) {
+      p.hp = p.maxHp; p.stamina = p.maxStamina; p.flasks = 3;
+      document.getElementById('flask-count').textContent = p.flasks;
+    }
+  }
+}
+
+/* ================= 死亡逻辑 ================= */
+function handleDeath() {
+  const p = state.player;
+  p.state = 'dead'; p.hp = 0;
+  if (p.souls > 0) state.bloodstain = { x: p.x, y: p.y, amount: p.souls };
+  p.souls = 0; document.getElementById('souls-count').textContent = '0';
+  
+  const deathScreen = document.getElementById('death-screen');
+  deathScreen.classList.add('show');
+  
+  setTimeout(() => {
+    deathScreen.classList.remove('show');
+    p.x = state.bonfire.x; p.y = state.bonfire.y - 30;
+    p.hp = p.maxHp; p.stamina = p.maxStamina; p.flasks = 3; p.state = 'idle';
+    document.getElementById('flask-count').textContent = p.flasks;
+    state.enemies.forEach(e => { e.x = W/2 + 180; e.y = H/2 - 150; e.hp = e.maxHp; e.timer = 0; e.state = 'idle'; });
+  }, 2500);
+}
+
+/* ================= 渲染（暗黑地牢风格） ================= */
+function render() {
+  const p = state.player;
+  ctx.clearRect(0, 0, W, H);
+  
+  // 1. 绘制地牢地面
+  ctx.fillStyle = '#151517'; ctx.fillRect(0, 0, W, H);
+  
+  // 绘制地砖纹理（粗糙感）
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
+  const tileSize = 50;
+  for (let x = 0; x < W; x += tileSize) { for (let y = 0; y < H; y += tileSize) { ctx.strokeRect(x, y, tileSize, tileSize); } }
+  
+  // 2. 绘制篝火
+  const time = state.time;
+  ctx.beginPath(); ctx.arc(state.bonfire.x, state.bonfire.y, 25, 0, Math.PI*2);
+  ctx.fillStyle = '#111'; ctx.fill();
+  // 火焰跳动
+  const fireScale = 1 + Math.sin(time * 10) * 0.15;
+  ctx.beginPath(); ctx.arc(state.bonfire.x, state.bonfire.y, 12 * fireScale, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(255, 100, 0, ${0.6 + Math.sin(time*15)*0.2})`; ctx.fill();
+  ctx.beginPath(); ctx.arc(state.bonfire.x, state.bonfire.y, 6 * fireScale, 0, Math.PI*2);
+  ctx.fillStyle = `rgba(255, 200, 50, ${0.8 + Math.sin(time*20)*0.2})`; ctx.fill();
+  // 插在土里的剑
+  ctx.beginPath(); ctx.moveTo(state.bonfire.x - 10, state.bonfire.y + 10); ctx.lineTo(state.bonfire.x - 5, state.bonfire.y - 15);
+  ctx.strokeStyle = '#555'; ctx.lineWidth = 3; ctx.stroke();
+
+  // 3. 绘制血迹（掉落的魂）
+  if (state.bloodstain) {
+    ctx.beginPath(); ctx.arc(state.bloodstain.x, state.bloodstain.y, 12, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(139, 0, 0, 0.4)'; ctx.fill();
+    ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 2; ctx.stroke();
+  }
+
+  // 4. 绘制敌人（活尸）
+  state.enemies.forEach(enemy => {
+    if (enemy.hp <= 0) return;
+    const ex = enemy.x, ey = enemy.y;
+    // 身体
+    ctx.beginPath(); ctx.ellipse(ex, ey, 14, 18, Math.sin(time*5 + ex)*0.1, 0, Math.PI*2);
+    ctx.fillStyle = enemy.state === 'windup' ? '#6b1a1a' : enemy.color; ctx.fill();
+    // 眼睛
+    ctx.beginPath(); ctx.arc(ex - 5, ey - 5, 2, 0, Math.PI*2); ctx.arc(ex + 5, ey - 5, 2, 0, Math.PI*2);
+    ctx.fillStyle = '#e74c3c'; ctx.fill();
+    // 手中的木棒
+    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(ex + 20, ey + 15); ctx.strokeStyle = '#5c4033'; ctx.lineWidth = 4; ctx.stroke();
+    // 敌人血条（暗色）
+    ctx.fillStyle = '#111'; ctx.fillRect(ex - 20, ey - 30, 40, 4);
+    ctx.fillStyle = '#8b0000'; ctx.fillRect(ex - 20, ey - 30, 40 * (enemy.hp/enemy.maxHp), 4);
+  });
+
+  // 5. 绘制玩家（游魂骑士）
+  const px = p.x, py = p.y;
+  ctx.save();
+  ctx.translate(px, py);
+  const angle = Math.atan2(p.dy, p.dx);
+  ctx.rotate(angle);
+  // 盾牌（左侧）
+  ctx.beginPath(); ctx.arc(-8, -8, 10, 0, Math.PI*2); ctx.fillStyle = '#2a2a2a'; ctx.fill(); ctx.strokeStyle = '#555'; ctx.lineWidth = 2; ctx.stroke();
+  // 身体
+  ctx.beginPath(); ctx.ellipse(0, 0, 14, 12, 0, 0, Math.PI*2); ctx.fillStyle = p.invuln ? '#ccc' : '#1a1a1a'; ctx.fill(); ctx.strokeStyle = '#444'; ctx.lineWidth = 2; ctx.stroke();
+  // 头盔（面罩）
+  ctx.beginPath(); ctx.moveTo(4, -8); ctx.lineTo(12, 0); ctx.lineTo(4, 8); ctx.fillStyle = '#333'; ctx.fill();
+  // 剑（右侧）
+  ctx.beginPath(); ctx.moveTo(5, 8); ctx.lineTo(30, 15); ctx.strokeStyle = '#888'; ctx.lineWidth = 4; ctx.stroke();
+  ctx.restore();
+
+  // 攻击判定范围
+  if (p.state === 'attack' && p.attackBox) {
+    ctx.beginPath(); ctx.arc(p.attackBox.x, p.attackBox.y, p.attackBox.r, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(200, 50, 50, 0.2)'; ctx.fill();
+  }
+
+  // 6. 视野迷雾（黑魂氛围核心）
+  const visionRadius = 250;
+  const gradient = ctx.createRadialGradient(px, py, 50, px, py, visionRadius);
+  gradient.addColorStop(0, 'rgba(0,0,0,0)');
+  gradient.addColorStop(1, 'rgba(0,0,0,0.95)');
+  ctx.fillStyle = gradient; ctx.fillRect(0, 0, W, H);
+  
+  // 边缘暗角
+  const vignette = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.3, W/2, H/2, Math.max(W,H)*0.8);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(1, 'rgba(0,0,0,0.8)');
+  ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
+
+  // 更新UI
+  document.getElementById('hp-bar').style.width = Math.max(0, (p.hp / p.maxHp) * 100) + '%';
+  document.getElementById('stamina-bar').style.width = Math.max(0, (p.stamina / p.maxStamina) * 100) + '%';
+}
+
+let lastTime = 0;
+function loop(time) {
+  const dt = Math.min((time - lastTime) / 1000, 0.1) || 0;
+  lastTime = time;
+  if (state.player.state !== 'dead') update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
